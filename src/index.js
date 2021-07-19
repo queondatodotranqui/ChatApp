@@ -4,6 +4,7 @@ const http = require('http');
 const socketio = require('socket.io');
 const filter = require('bad-words')
 
+const { getUser, addUser, getUsersInRoom, removeUser } = require('./utils/users');
 const { generateMessage } = require('./utils/messages'); 
 
 const app = express()
@@ -24,19 +25,42 @@ app.get('/', (req, res)=>{
 io.on('connection', (socket)=>{
     console.log('New user connected')
 
+    socket.on('join', ({username , room}, callback) =>{
+        const { error, user} = addUser({ id: socket.id , username, room })
+
+        if(error){
+            return callback(error)
+        }
+
+        socket.join(user.room)
+
+        socket.emit('message', generateMessage('Welcome!', 'ADMIN'))
+        socket.broadcast.to(room).emit('message', generateMessage(`${user.username} has joined`, 'ADMIN'))
+
+        io.to(user.room).emit('roomData', {
+            room: user.room,
+            users: getUsersInRoom(user.room)
+        })
+
+        callback()
+    })
+
     socket.on('newMessage', (data , cb) =>{
+        const user = getUser(socket.id)
         const newFilter = new filter()
 
-        if(newFilter.isProfane(data)){
+        if(newFilter.isProfane(data.mensaje)){
             return cb('Profanity is not allowed')
         }
 
-        io.emit('message', generateMessage(data))
+        io.to(user.room).emit('message', generateMessage(data.mensaje, user.username))
         cb()
     })
 
     socket.on('sendLocation', (data, cb) =>{
+        const user = getUser(socket.id)
         io.emit('locationShared',{
+            username: user.username,
             link:`https://google.com/maps?q=${data.latitude},${data.longitude}`
         })
         cb('Location delivered')
@@ -44,7 +68,14 @@ io.on('connection', (socket)=>{
 
     socket.on('disconnect', ()=>{
         console.log('User disconnected')
-        io.emit('message', generateMessage(`Someone left the chat`))
+        const user = removeUser(socket.id)
+        if(user){
+            io.to(user.room).emit('message', generateMessage(`${user.username} left the chat`, 'ADMIN'))
+            io.to(user.room).emit('roomData', {
+                room: user.room,
+                users: getUsersInRoom(user.room)
+            })
+        }
     })
 })
 
